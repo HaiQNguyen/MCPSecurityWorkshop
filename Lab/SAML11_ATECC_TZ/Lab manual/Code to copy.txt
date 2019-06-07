@@ -1,0 +1,461 @@
+
+//TODO 1 – Secure functions header
+/**
+ *  @brief Print text on the terminal
+ *
+ *	Text will be in green to indicate that it is coming from secure world
+ *
+ *	@param	string	string to be displayed	
+ *	
+ *	@return	NULL	always return
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+void secure_console_puts (uint8_t * string);
+
+/**
+ *  @brief Print text on the terminal
+ *
+ *	Text will be in red to indicate that it is coming from non-secure world
+ *
+ *	@param	string	string to be displayed	
+ *	
+ *	@return	NULL	always return
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+void non_secure_console_puts (uint8_t * string);
+
+/**
+ *  @brief Start authentication process
+ *
+ *	the underlying process is the challenge and
+ *	response between 2 ATECC508
+ *	the two ATECC508 are required to be provisioned before using 
+ *	
+ *	
+ *	@return	NULL	always return
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+void SymmetricAuthentication(void);
+
+
+/**
+ *  @brief Return the authentication status
+ *
+ *	It allows the application in the non-secure world 
+ *	to check if it need to runs the authentication process
+ *
+ *	
+ *	@return	true if it is already authenticated, otherwise false
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+bool IsAuthenticated(void);
+
+
+
+/**
+ *  @brief Simulate the protected API 
+ *
+ *	it is just a sum function. Before the summation, it verify if 
+ *	the authentication process is successful 
+ *
+ *	@param	a		first element	
+ *	@param	b		second element
+ *	@param	sum		return the sum of a and b						
+ *
+ *	@return	function status
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+uint8_t APIInTrustZone(int * a, int * b, int * sum);
+
+/*************************************************************************************************************************************/
+
+
+
+
+
+//TODO 2 – secure functions body
+#define CHECK_STATUS(s)										\
+if(s != ATCA_SUCCESS) {										\
+	printf("status code: 0x%x\r\n", s);						\
+	printf("Error: Line %d in %s\r\n", __LINE__, __FILE__); \
+	return;													\							
+}															\
+
+
+/* Local variable section --------------------------------------------*/
+ATCAIfaceCfg cfg_ateccx08a_i2c_host = {
+	.iface_type				= ATCA_I2C_IFACE,
+	.devtype				= ATECC508A,
+	.atcai2c.slave_address	= 0xC2,
+	.atcai2c.bus			= 1,
+	.atcai2c.baud			= 400000,
+	.wake_delay				= 800,
+	.rx_retries				= 20,
+	.cfg_data              = &I2C_0
+};
+
+ATCAIfaceCfg cfg_ateccx08a_i2c_remote = {
+	.iface_type				= ATCA_I2C_IFACE,
+	.devtype				= ATECC508A,
+	.atcai2c.slave_address	= 0xC0,
+	.atcai2c.bus			= 1,
+	.atcai2c.baud			= 400000,
+	.wake_delay				= 800,
+	.rx_retries				= 20,
+	.cfg_data              = &I2C_0
+};
+
+
+
+/* Local function prototype section ----------------------------------*/
+
+static void print_bytes(uint8_t * ptr, uint8_t length);
+bool static authen_status = false;
+
+
+static void print_bytes(uint8_t * ptr, uint8_t length)
+{
+	
+	uint8_t i = 0;
+	uint8_t line_count = 0;
+	for(;i < length; i++) {
+		printf("0x%02x, ",ptr[i]);
+		line_count++;
+		if(line_count == 8) {
+			printf("\r\n");
+			line_count = 0;
+		}
+	}
+	
+	printf("\r\n");
+}
+
+void secure_console_puts (uint8_t * string)
+{
+	/* Set display foreground color to green */
+	printf("\033[0;32m");
+	/* Print string on console */
+	printf("%s", string);
+}
+
+void non_secure_console_puts (uint8_t * string)
+{
+	/* Set display foreground color to red */
+	printf("\033[0;31m");
+	/* Print string on console */
+	printf("%s", string);
+}
+
+bool IsAuthenticated(void)
+{
+	return authen_status;	
+}
+
+
+void SymmetricAuthentication(void)
+{
+	
+	//Step 1.1
+	/* Set display foreground color to green */
+	printf("\033[0;32m");
+	printf("Symmetric Authentication\r\n");
+	
+	printf("Authentication in progress\r\n");
+	volatile ATCA_STATUS status;
+	status = atcab_init( &cfg_ateccx08a_i2c_host ); CHECK_STATUS(status);
+	printf("Host init complete\r\n");
+	
+
+	uint8_t serial_number[ATCA_SERIAL_NUM_SIZE];
+	status = atcab_read_serial_number((uint8_t*)&serial_number);
+	CHECK_STATUS(status);
+	printf("Serial Number of host\r\n");
+	print_bytes((uint8_t*)&serial_number, 9); printf("\r\n");
+	
+
+	uint8_t nonce[32];
+	status = atcab_random((uint8_t*)&nonce);
+	CHECK_STATUS(status);
+	printf("Random from host\r\n");
+	print_bytes((uint8_t*)&nonce, 32);
+
+
+	status = atcab_init( &cfg_ateccx08a_i2c_remote );
+	CHECK_STATUS(status);
+	
+	status = atcab_read_serial_number((uint8_t*)&serial_number);
+	CHECK_STATUS(status);
+	
+	printf("Serial Number of remote\r\n");
+	print_bytes((uint8_t*)&serial_number, 9); printf("\r\n");
+	
+
+	uint8_t mac[32];
+	uint8_t slot = 0; uint8_t mode = (1<<6); // include serial number
+	status = atcab_mac(mode, slot, (const uint8_t*)&nonce, (uint8_t*)&mac);
+	CHECK_STATUS(status);
+	printf("MAC from remote\r\n");
+	print_bytes((uint8_t*)&mac, 32);
+	
+
+	status = atcab_init( &cfg_ateccx08a_i2c_host );
+	uint8_t otherdata[CHECKMAC_OTHER_DATA_SIZE];
+	memset(otherdata, 0x00, CHECKMAC_OTHER_DATA_SIZE);
+	otherdata[0] = 0x08;
+	otherdata[1] = 0x40;
+	otherdata[7] = serial_number[4];
+	otherdata[8] = serial_number[5];
+	otherdata[9] = serial_number[6];
+	otherdata[10] = serial_number[7];
+	otherdata[11] = serial_number[2];
+	otherdata[12] = serial_number[3];
+	mode = 0;
+	
+	status = atcab_checkmac(mode, slot, (const uint8_t*)&nonce, (const uint8_t*)&mac, (const uint8_t*)&otherdata);
+	
+	if(status == ATCA_SUCCESS)
+	{
+		printf("Authenticated by host\r\n\r\n");
+		authen_status = true;
+	}
+	else
+	{
+		printf("Failed to authenticate\r\n\r\n");
+		authen_status = false;
+	}
+}
+
+uint8_t APIInTrustZone(int * a, int * b, int * sum)
+{
+
+	if(authen_status)
+	{
+		*sum = *a + *b;
+		return 0;
+	}
+	else
+	{	
+		return 1; 
+	}
+	
+}
+
+/*************************************************************************************************************************************/
+
+
+
+//TODO 3 – veneer functions header
+/**
+ *  @brief Print text on the terminal
+ *
+ *	Text will be in red to indicate that it is coming from non-secure world
+ *
+ *	@param	string	string to be displayed	
+ *	
+ *	@return	NULL	always return
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+extern void nsc_non_secure_console_puts (uint8_t * string);
+
+/**
+ *  @brief Start authentication process
+ *
+ *	the underlying process is the challenge and
+ *	response between 2 ATECC508
+ *	the two ATECC508 are required to be provisioned before using 
+ *	
+ *	
+ *	@return	NULL	always return
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+extern void nsc_SymmetricAuthentication (void);
+
+/**
+ *  @brief Return the authentication status
+ *
+ *	It allows the application in the non-secure world 
+ *	to check if it need to runs the authentication process
+ *
+ *	
+ *	@return	true if it is already authenticated, otherwise false
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+extern bool nsc_IsAuthenticated (void);
+
+/**
+ *  @brief Simulate the protected API 
+ *
+ *	it is just a sum function. Before the summation, it verify if 
+ *	the authentication process is successful 
+ *
+ *	@param	a		first element	
+ *	@param	b		second element
+ *	@param	sum		return the sum of a and b						
+ *
+ *	@return	function status
+ *
+ *	@date	29.05.2019 - initial 
+ *
+ *  @bug No known bugs.
+ */
+extern uint8_t nsc_APIInTrustZone (int * a, int * b, int * sum);
+
+/*************************************************************************************************************************************/
+
+
+
+
+//TODO 4 – veneer functions body
+void __attribute__((cmse_nonsecure_entry)) nsc_non_secure_console_puts (uint8_t * string)
+{
+	non_secure_console_puts(string);
+}
+
+void __attribute__((cmse_nonsecure_entry)) nsc_SymmetricAuthentication (void)
+{
+	SymmetricAuthentication();
+}
+
+bool __attribute__((cmse_nonsecure_entry)) nsc_IsAuthenticated (void)
+{
+	return IsAuthenticated();
+}
+
+uint8_t __attribute__((cmse_nonsecure_entry)) nsc_APIInTrustZone (int * a, int * b, int * sum)
+{
+	return APIInTrustZone(a,b,sum);
+}
+
+/*************************************************************************************************************************************/
+
+
+
+
+//TODO 5 – secure app, declaration
+/* TZ_START_NS: Start address of non-secure application */
+#define TZ_START_NS 0x00008000
+
+/* typedef for non-secure callback functions */
+typedef void (*ns_funcptr_void) (void) __attribute__((cmse_nonsecure_call));
+
+/*************************************************************************************************************************************/
+
+
+
+//TODO 6 - Initialize non-secure application
+/* Pointer to Non secure reset handler definition*/
+ns_funcptr_void NonSecure_ResetHandler;
+	
+/* Print Secure Hello world on the terminal window */
+secure_console_puts("\x1b[2J");
+secure_console_puts ("Secure Hello world !\r\n");
+
+/* - Set non-secure main stack (MSP_NS) */
+__TZ_set_MSP_NS(*((uint32_t *)(TZ_START_NS)));
+
+/* - Get non-secure reset handler */
+NonSecure_ResetHandler = (ns_funcptr_void)(*((uint32_t *)((TZ_START_NS) + 4U)));
+
+/* - Start Non-secure Application */
+NonSecure_ResetHandler();
+
+
+/*************************************************************************************************************************************/
+
+
+//TODO 7 – non-secure app, declaration
+static int a = 10;
+static int b = 20;
+static int sum = 0;
+static char s[100];
+
+/*************************************************************************************************************************************/
+
+
+
+
+//TODO 8 – non-secure, main function body
+
+/* Verify non-secure application is authenticated */
+nsc_non_secure_console_puts((uint8_t *)"Non-Secure Hello World !\r\n");
+
+/*Try to execute secure function call before authentication*/
+nsc_non_secure_console_puts((uint8_t *)"Verify non-secure application is authenticated\r\n");	
+if(nsc_IsAuthenticated())
+{
+	nsc_non_secure_console_puts((uint8_t *)"Authenticated\r\n");
+}
+else
+{
+	nsc_non_secure_console_puts((uint8_t *)"Not authenticated\r\n");
+}
+
+/*Execute secure function without authentication*/
+nsc_non_secure_console_puts((uint8_t *)"Try to call the API in trustzone without authentication\r\n");
+if(0 == nsc_APIInTrustZone(&a, &b, &sum))
+{
+	sprintf(s, "sum of %d and %d is %d\r\n", a, b, sum);
+	nsc_non_secure_console_puts((uint8_t *)s);
+}
+else
+{
+	nsc_non_secure_console_puts((uint8_t *)"Function is not executed\r\n");
+}
+
+/*Authentication and call the secure function again*/
+nsc_non_secure_console_puts((uint8_t *)"Press SW0 to start Authenticate\r\n");
+while(gpio_get_pin_level(SW0));	
+
+nsc_SymmetricAuthentication();
+
+nsc_non_secure_console_puts((uint8_t *)"Verify non-secure application is authenticated\r\n");
+if(nsc_IsAuthenticated())
+{
+	nsc_non_secure_console_puts((uint8_t *)"Authenticated\r\n");
+}
+else
+{
+	nsc_non_secure_console_puts((uint8_t *)"Not authenticated\r\n");
+}
+
+nsc_non_secure_console_puts((uint8_t *)"Try to call the API in trustzone again\r\n");
+if(0 == nsc_APIInTrustZone(&a, &b, &sum))
+{
+	sprintf(s, "sum of %d and %d is %d\r\n", a, b, sum);
+	nsc_non_secure_console_puts((uint8_t *)s);
+}
+else
+{
+	nsc_non_secure_console_puts((uint8_t *)"Function is not executed\r\n");
+}
+
+
+
+
+
+
+
